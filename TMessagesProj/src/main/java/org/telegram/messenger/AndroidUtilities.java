@@ -50,6 +50,7 @@ import android.provider.MediaStore;
 import android.provider.Settings;
 
 import androidx.core.content.FileProvider;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.viewpager.widget.ViewPager;
 
 import android.telephony.TelephonyManager;
@@ -93,15 +94,15 @@ import com.android.internal.telephony.ITelephony;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
 import com.google.android.gms.tasks.Task;
-
-import net.hockeyapp.android.CrashManager;
-import net.hockeyapp.android.CrashManagerListener;
-import net.hockeyapp.android.UpdateManager;
+import com.microsoft.appcenter.AppCenter;
+import com.microsoft.appcenter.crashes.Crashes;
+import com.microsoft.appcenter.distribute.Distribute;
 
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.ActionBar.ActionBarLayout;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.BottomSheet;
@@ -111,6 +112,7 @@ import org.telegram.ui.Components.BackgroundGradientDrawable;
 import org.telegram.ui.Components.ForegroundDetector;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.PickerBottomLayout;
+import org.telegram.ui.Components.RecyclerListView;
 import org.telegram.ui.Components.ShareAlert;
 import org.telegram.ui.Components.TypefaceSpan;
 import org.telegram.ui.ThemePreviewActivity;
@@ -122,6 +124,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -308,7 +311,14 @@ public class AndroidUtilities {
         if (links.size() == 0) {
             return false;
         }
-        for (LinkSpec link : links) {
+        for (int a = 0, N = links.size(); a < N; a++) {
+            LinkSpec link = links.get(a);
+            URLSpan[] oldSpans = text.getSpans(link.start, link.end, URLSpan.class);
+            if (oldSpans != null && oldSpans.length > 0) {
+                for (int b = 0; b < oldSpans.length; b++) {
+                    text.removeSpan(oldSpans[b]);
+                }
+            }
             text.setSpan(new URLSpan(link.url), link.start, link.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         return true;
@@ -456,8 +466,8 @@ public class AndroidUtilities {
         double rf = r / 255.0;
         double gf = g / 255.0;
         double bf = b / 255.0;
-        double max = (rf > gf && rf > bf) ? rf : (gf > bf) ? gf : bf;
-        double min = (rf < gf && rf < bf) ? rf : (gf < bf) ? gf : bf;
+        double max = (rf > gf && rf > bf) ? rf : Math.max(gf, bf);
+        double min = (rf < gf && rf < bf) ? rf : Math.min(gf, bf);
         double h, s;
         double d = max - min;
         s = max == 0 ? 0 : d / max;
@@ -524,7 +534,11 @@ public class AndroidUtilities {
     }
 
     public static void requestAdjustResize(Activity activity, int classGuid) {
-        if (activity == null || isTablet() || SharedConfig.smoothKeyboard) {
+        requestAdjustResize(activity, classGuid, false);
+    }
+
+    public static void requestAdjustResize(Activity activity, int classGuid, boolean allowWithSmoothKeyboard) {
+        if (activity == null || isTablet() || SharedConfig.smoothKeyboard && !allowWithSmoothKeyboard) {
             return;
         }
         activity.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -541,11 +555,28 @@ public class AndroidUtilities {
     }
 
     public static void removeAdjustResize(Activity activity, int classGuid) {
-        if (activity == null || isTablet() || SharedConfig.smoothKeyboard) {
+        removeAdjustResize(activity, classGuid, false);
+    }
+
+    public static void removeAdjustResize(Activity activity, int classGuid, boolean allowWithSmoothKeyboard) {
+        if (activity == null || isTablet() || SharedConfig.smoothKeyboard && !allowWithSmoothKeyboard) {
             return;
         }
         if (adjustOwnerClassGuid == classGuid) {
             activity.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+        }
+    }
+
+    public static void createEmptyFile(File f) {
+        try {
+            if (f.exists()) {
+                return;
+            }
+            FileWriter writer = new FileWriter(f);
+            writer.flush();
+            writer.close();
+        } catch (Throwable e) {
+            FileLog.e(e);
         }
     }
 
@@ -1194,19 +1225,6 @@ public class AndroidUtilities {
         return false;
     }
 
-    public static boolean isKeyboardShowed(View view) {
-        if (view == null) {
-            return false;
-        }
-        try {
-            InputMethodManager inputManager = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            return inputManager.isActive(view);
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        return false;
-    }
-
     public static String[] getCurrentKeyboardLanguage() {
         try {
             InputMethodManager inputManager = (InputMethodManager) ApplicationLoader.applicationContext.getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -1521,7 +1539,6 @@ public class AndroidUtilities {
         }
     }*/
 
-    private static ContentObserver callLogContentObserver;
     private static Runnable unregisterRunnable;
     private static boolean hasCallPermissions = Build.VERSION.SDK_INT >= 23;
 
@@ -1865,7 +1882,7 @@ public class AndroidUtilities {
             return;
         }
         AnimatorSet animatorSet = new AnimatorSet();
-        animatorSet.playTogether(ObjectAnimator.ofFloat(view, "translationX", AndroidUtilities.dp(x)));
+        animatorSet.playTogether(ObjectAnimator.ofFloat(view, "translationX", dp(x)));
         animatorSet.setDuration(50);
         animatorSet.addListener(new AnimatorListenerAdapter() {
             @Override
@@ -1925,28 +1942,32 @@ public class AndroidUtilities {
         }
     }*/
 
-    public static void checkForCrashes(Activity context) {
+    public static void startAppCenter(Activity context) {
         try {
-            CrashManager.register(context, BuildVars.DEBUG_VERSION ? BuildVars.HOCKEY_APP_HASH_DEBUG : BuildVars.HOCKEY_APP_HASH, new CrashManagerListener() {
-                @Override
-                public boolean includeDeviceData() {
-                    return true;
-                }
-            });
+            if (BuildVars.DEBUG_VERSION) {
+                Distribute.setEnabledForDebuggableBuild(true);
+                AppCenter.start(context.getApplication(), BuildVars.DEBUG_VERSION ? BuildVars.APPCENTER_HASH_DEBUG : BuildVars.APPCENTER_HASH, Distribute.class, Crashes.class);
+            } else {
+                AppCenter.start(context.getApplication(), BuildVars.DEBUG_VERSION ? BuildVars.APPCENTER_HASH_DEBUG : BuildVars.APPCENTER_HASH, Crashes.class);
+            }
+            AppCenter.setUserId("uid=" + UserConfig.getInstance(UserConfig.selectedAccount).clientUserId);
         } catch (Throwable e) {
             FileLog.e(e);
         }
     }
 
-    public static void checkForUpdates(Activity context) {
-        if (BuildVars.DEBUG_VERSION) {
-            UpdateManager.register(context, BuildVars.DEBUG_VERSION ? BuildVars.HOCKEY_APP_HASH_DEBUG : BuildVars.HOCKEY_APP_HASH);
-        }
-    }
-
-    public static void unregisterUpdates() {
-        if (BuildVars.DEBUG_VERSION) {
-            UpdateManager.unregister();
+    private static long lastUpdateCheckTime;
+    public static void checkForUpdates() {
+        try {
+            if (BuildVars.DEBUG_VERSION) {
+                if (SystemClock.elapsedRealtime() - lastUpdateCheckTime < 60 * 60 * 1000) {
+                    return;
+                }
+                lastUpdateCheckTime = SystemClock.elapsedRealtime();
+                Distribute.checkForUpdate();
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
         }
     }
 
@@ -2306,6 +2327,58 @@ public class AndroidUtilities {
         }
     }
 
+    public static String formatCount(int count) {
+        if (count < 1000) return Integer.toString(count);
+
+        ArrayList<String> strings = new ArrayList<>();
+        while (count != 0) {
+            int mod = count % 1000;
+            count /= 1000;
+            if (count > 0) {
+                strings.add(String.format(Locale.ENGLISH, "%03d", mod));
+            } else {
+                strings.add(Integer.toString(mod));
+            }
+        }
+        StringBuilder stringBuilder = new StringBuilder();
+        for (int i = strings.size() - 1; i >= 0; i--) {
+            stringBuilder.append(strings.get(i));
+            if (i != 0) {
+                stringBuilder.append(",");
+            }
+        }
+
+        return stringBuilder.toString();
+    }
+
+    public static final String[] numbersSignatureArray = {"", "K", "M", "G", "T", "P"};
+
+    public static String formatWholeNumber(int v, int dif) {
+        if (v == 0) {
+            return "0";
+        }
+        float num_ = v;
+        int count = 0;
+        if (dif == 0) dif = v;
+        if (dif < 1000) {
+            return AndroidUtilities.formatCount(v);
+        }
+        while (dif >= 1000 && count < numbersSignatureArray.length - 1) {
+            dif /= 1000;
+            num_ /= 1000;
+            count++;
+        }
+        if (num_ < 0.1) {
+            return "0";
+        } else {
+            if (num_ == (int) num_) {
+                return String.format(Locale.ENGLISH, "%s%s", AndroidUtilities.formatCount((int) num_), numbersSignatureArray[count]);
+            } else {
+                return String.format(Locale.ENGLISH, "%.1f%s", (int) (num_ * 10) / 10f, numbersSignatureArray[count]);
+            }
+        }
+    }
+
     public static byte[] decodeQuotedPrintable(final byte[] bytes) {
         if (bytes == null) {
             return null;
@@ -2452,7 +2525,7 @@ public class AndroidUtilities {
         }
     }
 
-    public static void openForView(MessageObject message, final Activity activity) {
+    public static boolean openForView(MessageObject message, final Activity activity) {
         File f = null;
         String fileName = message.getFileName();
         if (message.messageOwner.attachPath != null && message.messageOwner.attachPath.length() != 0) {
@@ -2492,7 +2565,7 @@ public class AndroidUtilities {
                 });
                 builder.setNegativeButton(LocaleController.getString("Cancel", R.string.Cancel), null);
                 builder.show();
-                return;
+                return true;
             }
             if (Build.VERSION.SDK_INT >= 24) {
                 intent.setDataAndType(FileProvider.getUriForFile(activity, BuildConfig.APPLICATION_ID + ".provider", f), realMimeType != null ? realMimeType : "text/plain");
@@ -2513,7 +2586,28 @@ public class AndroidUtilities {
             } else {
                 activity.startActivityForResult(intent, 500);
             }
+            return true;
         }
+        return false;
+    }
+
+    public static CharSequence replaceNewLines(CharSequence original) {
+        if (original instanceof StringBuilder) {
+            StringBuilder stringBuilder = (StringBuilder) original;
+            for (int a = 0, N = original.length(); a < N; a++) {
+                if (original.charAt(a) == '\n') {
+                    stringBuilder.setCharAt(a, ' ');
+                }
+            }
+        } else if (original instanceof SpannableStringBuilder) {
+            SpannableStringBuilder stringBuilder = (SpannableStringBuilder) original;
+            for (int a = 0, N = original.length(); a < N; a++) {
+                if (original.charAt(a) == '\n') {
+                    stringBuilder.replace(a, a + 1, " ");
+                }
+            }
+        }
+        return original.toString().replace('\n', ' ');
     }
 
     public static void openForView(TLObject media, Activity activity) {
@@ -2815,6 +2909,15 @@ public class AndroidUtilities {
         return null;
     }
 
+    public static void fixGoogleMapsBug() { //https://issuetracker.google.com/issues/154855417#comment301
+        SharedPreferences googleBug = ApplicationLoader.applicationContext.getSharedPreferences("google_bug_154855417", Context.MODE_PRIVATE);
+        if (!googleBug.contains("fixed")) {
+            File corruptedZoomTables = new File(ApplicationLoader.getFilesDirFixed(), "ZoomTables.data");
+            corruptedZoomTables.delete();
+            googleBug.edit().putBoolean("fixed", true).apply();
+        }
+    }
+
     public static CharSequence concat(CharSequence... text) {
         if (text.length == 0) {
             return "";
@@ -2853,11 +2956,11 @@ public class AndroidUtilities {
     public static float[] RGBtoHSB(int r, int g, int b) {
         float hue, saturation, brightness;
         float[] hsbvals = new float[3];
-        int cmax = (r > g) ? r : g;
+        int cmax = Math.max(r, g);
         if (b > cmax) {
             cmax = b;
         }
-        int cmin = (r < g) ? r : g;
+        int cmin = Math.min(r, g);
         if (b < cmin) {
             cmin = b;
         }
@@ -3013,7 +3116,7 @@ public class AndroidUtilities {
     public static float distanceInfluenceForSnapDuration(float f) {
         f -= 0.5F;
         f *= 0.47123894F;
-        return (float) Math.sin((double) f);
+        return (float) Math.sin(f);
     }
 
     public static void makeAccessibilityAnnouncement(CharSequence what) {
@@ -3205,5 +3308,71 @@ public class AndroidUtilities {
             }
             decorView.setSystemUiVisibility(flags);
         }
+    }
+
+    public static boolean shouldShowUrlInAlert(String url) {
+        boolean hasLatin = false;
+        boolean hasNonLatin = false;
+        try {
+            Uri uri = Uri.parse(url);
+            url = uri.getHost();
+
+            for (int a = 0, N = url.length(); a < N; a++) {
+                char ch = url.charAt(a);
+                if (ch == '.' || ch == '-' || ch == '/' || ch == '+' || ch >= '0' && ch <= '9') {
+                    continue;
+                }
+                if (ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z') {
+                    hasLatin = true;
+                } else {
+                    hasNonLatin = true;
+                }
+                if (hasLatin && hasNonLatin) {
+                    break;
+                }
+            }
+
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return hasLatin && hasNonLatin;
+    }
+
+    public static void scrollToFragmentRow(ActionBarLayout parentLayout, String rowName) {
+        if (parentLayout == null || rowName == null) {
+            return;
+        }
+        BaseFragment openingFragment = parentLayout.fragmentsStack.get(parentLayout.fragmentsStack.size() - 1);
+        try {
+            Field listViewField = openingFragment.getClass().getDeclaredField("listView");
+            listViewField.setAccessible(true);
+            RecyclerListView listView = (RecyclerListView) listViewField.get(openingFragment);
+            RecyclerListView.IntReturnCallback callback = () -> {
+                int position = -1;
+                try {
+                    Field rowField = openingFragment.getClass().getDeclaredField(rowName);
+                    rowField.setAccessible(true);
+                    LinearLayoutManager layoutManager = (LinearLayoutManager) listView.getLayoutManager();
+                    position = rowField.getInt(openingFragment);
+                    layoutManager.scrollToPositionWithOffset(position, AndroidUtilities.dp(60));
+                    rowField.setAccessible(false);
+                    return position;
+                } catch (Throwable ignore) {
+
+                }
+                return position;
+            };
+            listView.highlightRow(callback);
+            listViewField.setAccessible(false);
+        } catch (Throwable ignore) {
+
+        }
+    }
+
+    public static boolean checkInlinePermissions(Context context) {
+        if (Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context)) {
+            return true;
+        }
+        return false;
     }
 }

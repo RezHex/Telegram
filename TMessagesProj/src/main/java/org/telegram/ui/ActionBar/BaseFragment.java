@@ -41,6 +41,8 @@ import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.ConnectionsManager;
 
+import java.util.ArrayList;
+
 public class BaseFragment {
 
     private boolean isFinished;
@@ -52,6 +54,7 @@ public class BaseFragment {
     protected ActionBarLayout parentLayout;
     protected ActionBar actionBar;
     protected boolean inPreviewMode;
+    protected boolean inBubbleMode;
     protected int classGuid;
     protected Bundle arguments;
     protected boolean hasOwnBackground = false;
@@ -101,6 +104,14 @@ public class BaseFragment {
         return true;
     }
 
+    public void setInBubbleMode(boolean value) {
+        inBubbleMode = value;
+    }
+
+    public boolean isInBubbleMode() {
+        return inBubbleMode;
+    }
+
     protected void setInPreviewMode(boolean value) {
         inPreviewMode = value;
         if (actionBar != null) {
@@ -110,6 +121,10 @@ public class BaseFragment {
                 actionBar.setOccupyStatusBar(Build.VERSION.SDK_INT >= 21);
             }
         }
+    }
+
+    protected boolean hideKeyboardOnShow() {
+        return true;
     }
 
     protected void clearViews() {
@@ -151,6 +166,7 @@ public class BaseFragment {
     protected void setParentLayout(ActionBarLayout layout) {
         if (parentLayout != layout) {
             parentLayout = layout;
+            inBubbleMode = parentLayout != null && parentLayout.isInBubbleMode();
             if (fragmentView != null) {
                 ViewGroup parent = (ViewGroup) fragmentView.getParent();
                 if (parent != null) {
@@ -195,7 +211,7 @@ public class BaseFragment {
         actionBar.setItemsBackgroundColor(Theme.getColor(Theme.key_actionBarActionModeDefaultSelector), true);
         actionBar.setItemsColor(Theme.getColor(Theme.key_actionBarDefaultIcon), false);
         actionBar.setItemsColor(Theme.getColor(Theme.key_actionBarActionModeDefaultIcon), true);
-        if (inPreviewMode) {
+        if (inPreviewMode || inBubbleMode) {
             actionBar.setOccupyStatusBar(false);
         }
         return actionBar;
@@ -237,7 +253,8 @@ public class BaseFragment {
     }
 
     public void onFragmentDestroy() {
-        ConnectionsManager.getInstance(currentAccount).cancelRequestsForGuid(classGuid);
+        getConnectionsManager().cancelRequestsForGuid(classGuid);
+        getMessagesStorage().cancelTasksForGuid(classGuid);
         isFinished = true;
         if (actionBar != null) {
             actionBar.setEnabled(false);
@@ -338,7 +355,7 @@ public class BaseFragment {
         }
     }
 
-    public void dismissCurrentDialig() {
+    public void dismissCurrentDialog() {
         if (visibleDialog == null) {
             return;
         }
@@ -370,6 +387,10 @@ public class BaseFragment {
         if (actionBar != null) {
             actionBar.onPause();
         }
+    }
+
+    protected void onTransitionAnimationProgress(boolean isOpen, float progress) {
+
     }
 
     protected void onTransitionAnimationStart(boolean isOpen, boolean backward) {
@@ -477,8 +498,8 @@ public class BaseFragment {
         return false;
     }
 
-    public ThemeDescription[] getThemeDescriptions() {
-        return new ThemeDescription[0];
+    public ArrayList<ThemeDescription> getThemeDescriptions() {
+        return new ArrayList<>();
     }
 
     public AccountInstance getAccountInstance() {
@@ -501,7 +522,7 @@ public class BaseFragment {
         return getAccountInstance().getConnectionsManager();
     }
 
-    protected LocationController getLocationController() {
+    public LocationController getLocationController() {
         return getAccountInstance().getLocationController();
     }
 
@@ -509,7 +530,7 @@ public class BaseFragment {
         return getAccountInstance().getNotificationsController();
     }
 
-    protected MessagesStorage getMessagesStorage() {
+    public MessagesStorage getMessagesStorage() {
         return getAccountInstance().getMessagesStorage();
     }
 

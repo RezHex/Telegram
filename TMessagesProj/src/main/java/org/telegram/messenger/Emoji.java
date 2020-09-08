@@ -40,7 +40,7 @@ public class Emoji {
     private static int bigImgSize;
     private static boolean inited = false;
     private static Paint placeholderPaint;
-    private static int[] emojiCounts = new int[]{1620, 184, 115, 328, 125, 206, 288, 258};
+    private static int[] emojiCounts = new int[]{1620, 184, 115, 328, 125, 207, 288, 258};
     private static Bitmap[][] emojiBmp = new Bitmap[8][];
     private static boolean[][] loadingEmoji = new boolean[8][];
 
@@ -70,7 +70,27 @@ public class Emoji {
         placeholderPaint.setColor(0x00000000);
     }
 
+    public static void preloadEmoji(CharSequence code) {
+        final DrawableInfo info = getDrawableInfo(code);
+        if (info != null) {
+            loadEmoji(info.page, info.page2);
+        }
+    }
+
     private static void loadEmoji(final byte page, final short page2) {
+        if (emojiBmp[page][page2] == null) {
+            if (loadingEmoji[page][page2]) {
+                return;
+            }
+            loadingEmoji[page][page2] = true;
+            Utilities.globalQueue.postRunnable(() -> {
+                loadEmojiInternal(page, page2);
+                loadingEmoji[page][page2] = false;
+            });
+        }
+    }
+
+    private static void loadEmojiInternal(final byte page, final short page2) {
         try {
             float scale;
             int imageResize = 1;
@@ -165,13 +185,7 @@ public class Emoji {
     }
 
     public static EmojiDrawable getEmojiDrawable(CharSequence code) {
-        DrawableInfo info = rects.get(code);
-        if (info == null) {
-            CharSequence newCode = EmojiData.emojiAliasMap.get(code);
-            if (newCode != null) {
-                info = Emoji.rects.get(newCode);
-            }
-        }
+        DrawableInfo info = getDrawableInfo(code);
         if (info == null) {
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.d("No drawable for emoji " + code);
@@ -181,6 +195,17 @@ public class Emoji {
         EmojiDrawable ed = new EmojiDrawable(info);
         ed.setBounds(0, 0, drawImgSize, drawImgSize);
         return ed;
+    }
+
+    private static DrawableInfo getDrawableInfo(CharSequence code) {
+        DrawableInfo info = rects.get(code);
+        if (info == null) {
+            CharSequence newCode = EmojiData.emojiAliasMap.get(code);
+            if (newCode != null) {
+                info = Emoji.rects.get(newCode);
+            }
+        }
+        return info;
     }
 
     public static boolean isValidEmoji(CharSequence code) {
@@ -241,15 +266,8 @@ public class Emoji {
                 canvas.drawText(EmojiData.data[info.page][info.emojiIndex], getBounds().left, getBounds().bottom, textPaint);
                 return;
             }*/
-            if (emojiBmp[info.page][info.page2] == null) {
-                if (loadingEmoji[info.page][info.page2]) {
-                    return;
-                }
-                loadingEmoji[info.page][info.page2] = true;
-                Utilities.globalQueue.postRunnable(() -> {
-                    loadEmoji(info.page, info.page2);
-                    loadingEmoji[info.page][info.page2] = false;
-                });
+            if (!isLoaded()) {
+                loadEmoji(info.page, info.page2);
                 canvas.drawRect(getBounds(), placeholderPaint);
                 return;
             }
@@ -279,6 +297,16 @@ public class Emoji {
         @Override
         public void setColorFilter(ColorFilter cf) {
 
+        }
+
+        public boolean isLoaded() {
+            return emojiBmp[info.page][info.page2] != null;
+        }
+
+        public void preload() {
+            if (!isLoaded()) {
+                loadEmoji(info.page, info.page2);
+            }
         }
     }
 
@@ -458,6 +486,9 @@ public class Emoji {
         } catch (Exception e) {
             FileLog.e(e);
             return cs;
+        }
+        if (emojiOnly != null && emojiCode.length() != 0) {
+            emojiOnly[0] = 0;
         }
         return s;
     }

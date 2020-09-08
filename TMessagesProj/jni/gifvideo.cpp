@@ -30,6 +30,8 @@ static const std::string av_make_error_str(int errnum) {
 jclass jclass_AnimatedFileDrawableStream;
 jmethodID jclass_AnimatedFileDrawableStream_read;
 jmethodID jclass_AnimatedFileDrawableStream_cancel;
+jmethodID jclass_AnimatedFileDrawableStream_isFinishedLoadingFile;
+jmethodID jclass_AnimatedFileDrawableStream_getFinishedFilePath;
 
 typedef struct VideoInfo {
     
@@ -189,6 +191,20 @@ void requestFd(VideoInfo *info) {
         attached = false;
     }
     jniEnv->CallIntMethod(info->stream, jclass_AnimatedFileDrawableStream_read, (jint) 0, (jint) 1);
+    jboolean loaded = jniEnv->CallBooleanMethod(info->stream, jclass_AnimatedFileDrawableStream_isFinishedLoadingFile);
+    if (loaded) {
+        delete[] info->src;
+        jstring src = (jstring) jniEnv->CallObjectMethod(info->stream, jclass_AnimatedFileDrawableStream_getFinishedFilePath);
+        char const *srcString = jniEnv->GetStringUTFChars(src, 0);
+        size_t len = strlen(srcString);
+        info->src = new char[len + 1];
+        memcpy(info->src, srcString, len);
+        info->src[len] = '\0';
+        if (srcString != 0) {
+            jniEnv->ReleaseStringUTFChars(src, srcString);
+        }
+    }
+
     if (attached) {
         javaVm->DetachCurrentThread();
     }
@@ -566,20 +582,151 @@ void Java_org_telegram_ui_Components_AnimatedFileDrawable_seekToMs(JNIEnv *env, 
                 return;
             }
             if (got_frame) {
+                info->has_decoded_frames = true;
+                bool finished = false;
                 if (info->frame->format == AV_PIX_FMT_YUV420P || info->frame->format == AV_PIX_FMT_BGRA || info->frame->format == AV_PIX_FMT_YUVJ420P) {
                     int64_t pkt_pts = info->frame->best_effort_timestamp;
                     if (pkt_pts >= pts) {
-                        return;
+                        finished = true;
                     }
                 }
                 av_frame_unref(info->frame);
+                if (finished) {
+                    return;
+                }
             }
             tries--;
         }
     }
 }
+
+static inline void writeFrameToBitmap(JNIEnv *env, VideoInfo *info, jintArray data, jobject bitmap, jint stride) {
+    jint *dataArr = env->GetIntArrayElements(data, 0);
+    int32_t wantedWidth;
+    int32_t wantedHeight;
+    if (dataArr != nullptr) {
+        wantedWidth = dataArr[0];
+        wantedHeight = dataArr[1];
+        dataArr[3] = (jint) (1000 * info->frame->best_effort_timestamp * av_q2d(info->video_stream->time_base));
+        env->ReleaseIntArrayElements(data, dataArr, 0);
+    } else {
+        AndroidBitmapInfo bitmapInfo;
+        AndroidBitmap_getInfo(env, bitmap, &bitmapInfo);
+        wantedWidth = bitmapInfo.width;
+        wantedHeight = bitmapInfo.height;
+    }
+
+    void *pixels;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) >= 0) {
+        if (wantedWidth == info->frame->width && wantedHeight == info->frame->height || wantedWidth == info->frame->height && wantedHeight == info->frame->width) {
+            if (info->sws_ctx == nullptr) {
+                if (info->frame->format > AV_PIX_FMT_NONE && info->frame->format < AV_PIX_FMT_NB) {
+                    info->sws_ctx = sws_getContext(info->frame->width, info->frame->height, (AVPixelFormat) info->frame->format, info->frame->width, info->frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+                } else if (info->video_dec_ctx->pix_fmt > AV_PIX_FMT_NONE && info->video_dec_ctx->pix_fmt < AV_PIX_FMT_NB) {
+                    info->sws_ctx = sws_getContext(info->video_dec_ctx->width, info->video_dec_ctx->height, info->video_dec_ctx->pix_fmt, info->video_dec_ctx->width, info->video_dec_ctx->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+                }
+            }
+            if (info->sws_ctx == nullptr || ((intptr_t) pixels) % 16 != 0) {
+                if (info->frame->format == AV_PIX_FMT_YUV420P || info->frame->format == AV_PIX_FMT_YUVJ420P) {
+                    if (info->frame->colorspace == AVColorSpace::AVCOL_SPC_BT709) {
+                        libyuv::H420ToARGB(info->frame->data[0], info->frame->linesize[0], info->frame->data[2], info->frame->linesize[2], info->frame->data[1], info->frame->linesize[1], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
+                    } else {
+                        libyuv::I420ToARGB(info->frame->data[0], info->frame->linesize[0], info->frame->data[2], info->frame->linesize[2], info->frame->data[1], info->frame->linesize[1], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
+                    }
+                } else if (info->frame->format == AV_PIX_FMT_BGRA) {
+                    libyuv::ABGRToARGB(info->frame->data[0], info->frame->linesize[0], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
+                }
+            } else {
+                info->dst_data[0] = (uint8_t *) pixels;
+                info->dst_linesize[0] = stride;
+                sws_scale(info->sws_ctx, info->frame->data, info->frame->linesize, 0, info->frame->height, info->dst_data, info->dst_linesize);
+            }
+        }
+        AndroidBitmap_unlockPixels(env, bitmap);
+    }
+}
+
+int Java_org_telegram_ui_Components_AnimatedFileDrawable_getFrameAtTime(JNIEnv *env, jclass clazz, jlong ptr, jlong ms, jobject bitmap, jintArray data, jint stride) {
+    if (ptr == NULL || bitmap == nullptr || data == nullptr) {
+        return 0;
+    }
+    VideoInfo *info = (VideoInfo *) (intptr_t) ptr;
+    info->seeking = false;
+    int64_t pts = (int64_t) (ms / av_q2d(info->video_stream->time_base) / 1000);
+    int ret = 0;
+    if ((ret = av_seek_frame(info->fmt_ctx, info->video_stream_idx, pts, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_FRAME)) < 0) {
+        LOGE("can't seek file %s, %s", info->src, av_err2str(ret));
+        return 0;
+    } else {
+        avcodec_flush_buffers(info->video_dec_ctx);
+        int got_frame = 0;
+        int32_t tries = 1000;
+        bool readNextPacket = true;
+        while (tries > 0) {
+            if (info->pkt.size == 0 && readNextPacket) {
+                ret = av_read_frame(info->fmt_ctx, &info->pkt);
+                if (ret >= 0) {
+                    info->orig_pkt = info->pkt;
+                }
+            }
+
+            if (info->pkt.size > 0) {
+                ret = decode_packet(info, &got_frame);
+                if (ret < 0) {
+                    if (info->has_decoded_frames) {
+                        ret = 0;
+                    }
+                    info->pkt.size = 0;
+                } else {
+                    info->pkt.data += ret;
+                    info->pkt.size -= ret;
+                }
+                if (info->pkt.size == 0) {
+                    av_packet_unref(&info->orig_pkt);
+                }
+            } else {
+                info->pkt.data = NULL;
+                info->pkt.size = 0;
+                ret = decode_packet(info, &got_frame);
+                if (ret < 0) {
+                    return 0;
+                }
+                if (got_frame == 0) {
+                    av_seek_frame(info->fmt_ctx, info->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_FRAME);
+                    return 0;
+                }
+            }
+            if (ret < 0) {
+                return 0;
+            }
+            if (got_frame) {
+                bool finished = false;
+                if (info->frame->format == AV_PIX_FMT_YUV420P || info->frame->format == AV_PIX_FMT_BGRA || info->frame->format == AV_PIX_FMT_YUVJ420P) {
+                    int64_t pkt_pts = info->frame->best_effort_timestamp;
+                    bool isLastPacket = false;
+                    if (info->pkt.size == 0) {
+                        readNextPacket = false;
+                        isLastPacket = av_read_frame(info->fmt_ctx, &info->pkt) < 0;
+                    }
+                    if (pkt_pts >= pts || isLastPacket) {
+                        writeFrameToBitmap(env, info, data, bitmap, stride);
+                        finished = true;
+                    }
+                }
+                av_frame_unref(info->frame);
+                if (finished) {
+                    return 1;
+                }
+            } else {
+                readNextPacket = true;
+            }
+            tries--;
+        }
+        return 0;
+    }
+}
     
-jint Java_org_telegram_ui_Components_AnimatedFileDrawable_getVideoFrame(JNIEnv *env, jclass clazz, jlong ptr, jobject bitmap, jintArray data, jint stride, jboolean preview) {
+jint Java_org_telegram_ui_Components_AnimatedFileDrawable_getVideoFrame(JNIEnv *env, jclass clazz, jlong ptr, jobject bitmap, jintArray data, jint stride, jboolean preview, jfloat start_time, jfloat end_time) {
     if (ptr == NULL || bitmap == nullptr) {
         return 0;
     }
@@ -592,9 +739,15 @@ jint Java_org_telegram_ui_Components_AnimatedFileDrawable_getVideoFrame(JNIEnv *
     while (!info->stopped && triesCount != 0) {
         if (info->pkt.size == 0) {
             ret = av_read_frame(info->fmt_ctx, &info->pkt);
-            //LOGD("got packet with size %d", info->pkt.size);
             if (ret >= 0) {
-                info->orig_pkt = info->pkt;
+                double pts = info->pkt.pts * av_q2d(info->video_stream->time_base);
+                if (end_time > 0 && info->pkt.stream_index == info->video_stream_idx && pts > end_time) {
+                    av_packet_unref(&info->pkt);
+                    info->pkt.data = NULL;
+                    info->pkt.size = 0;
+                } else {
+                    info->orig_pkt = info->pkt;
+                }
             }
         }
 
@@ -624,7 +777,11 @@ jint Java_org_telegram_ui_Components_AnimatedFileDrawable_getVideoFrame(JNIEnv *
             }
             if (!preview && got_frame == 0) {
                 if (info->has_decoded_frames) {
-                    if ((ret = av_seek_frame(info->fmt_ctx, info->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_FRAME)) < 0) {
+                    int64_t start_from = 0;
+                    if (start_time > 0) {
+                        start_from = (int64_t)(start_time / av_q2d(info->video_stream->time_base));
+                    }
+                    if ((ret = av_seek_frame(info->fmt_ctx, info->video_stream_idx, start_from, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_FRAME)) < 0) {
                         LOGE("can't seek to begin of file %s, %s", info->src, av_err2str(ret));
                         return 0;
                     } else {
@@ -639,55 +796,10 @@ jint Java_org_telegram_ui_Components_AnimatedFileDrawable_getVideoFrame(JNIEnv *
         if (got_frame) {
             //LOGD("decoded frame with w = %d, h = %d, format = %d", info->frame->width, info->frame->height, info->frame->format);
             if (info->frame->format == AV_PIX_FMT_YUV420P || info->frame->format == AV_PIX_FMT_BGRA || info->frame->format == AV_PIX_FMT_YUVJ420P) {
-                jint *dataArr = env->GetIntArrayElements(data, 0);
-                int32_t wantedWidth;
-                int32_t wantedHeight;
-                if (dataArr != nullptr) {
-                    wantedWidth = dataArr[0];
-                    wantedHeight = dataArr[1];
-                    dataArr[3] = (jint) (1000 * info->frame->best_effort_timestamp * av_q2d(info->video_stream->time_base));
-                    env->ReleaseIntArrayElements(data, dataArr, 0);
-                } else {
-                    AndroidBitmapInfo bitmapInfo;
-                    AndroidBitmap_getInfo(env, bitmap, &bitmapInfo);
-                    wantedWidth = bitmapInfo.width;
-                    wantedHeight = bitmapInfo.height;
-                }
-
-                void *pixels;
-                if (AndroidBitmap_lockPixels(env, bitmap, &pixels) >= 0) {
-                    if (wantedWidth == info->frame->width && wantedHeight == info->frame->height || wantedWidth == info->frame->height && wantedHeight == info->frame->width) {
-                        if (info->sws_ctx == nullptr) {
-                            if (info->frame->format > AV_PIX_FMT_NONE && info->frame->format < AV_PIX_FMT_NB) {
-                                info->sws_ctx = sws_getContext(info->frame->width, info->frame->height, (AVPixelFormat) info->frame->format, info->frame->width, info->frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
-                            } else if (info->video_dec_ctx->pix_fmt > AV_PIX_FMT_NONE && info->video_dec_ctx->pix_fmt < AV_PIX_FMT_NB) {
-                                info->sws_ctx = sws_getContext(info->video_dec_ctx->width, info->video_dec_ctx->height, info->video_dec_ctx->pix_fmt, info->video_dec_ctx->width, info->video_dec_ctx->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
-                            }
-                        }
-                        if (info->sws_ctx == nullptr || ((intptr_t) pixels) % 16 != 0) {
-                            if (info->frame->format == AV_PIX_FMT_YUV420P || info->frame->format == AV_PIX_FMT_YUVJ420P) {
-                                if (info->frame->colorspace == AVColorSpace::AVCOL_SPC_BT709) {
-                                    libyuv::H420ToARGB(info->frame->data[0], info->frame->linesize[0], info->frame->data[2], info->frame->linesize[2], info->frame->data[1], info->frame->linesize[1], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
-                                } else {
-                                    libyuv::I420ToARGB(info->frame->data[0], info->frame->linesize[0], info->frame->data[2], info->frame->linesize[2], info->frame->data[1], info->frame->linesize[1], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
-                                }
-                            } else if (info->frame->format == AV_PIX_FMT_BGRA) {
-                                libyuv::ABGRToARGB(info->frame->data[0], info->frame->linesize[0], (uint8_t *) pixels, info->frame->width * 4, info->frame->width, info->frame->height);
-                            }
-                        } else {
-                            info->dst_data[0] = (uint8_t *) pixels;
-                            info->dst_linesize[0] = stride;
-                            sws_scale(info->sws_ctx, info->frame->data, info->frame->linesize, 0, info->frame->height, info->dst_data, info->dst_linesize);
-                        }
-                    }
-                    AndroidBitmap_unlockPixels(env, bitmap);
-                }
+                writeFrameToBitmap(env, info, data, bitmap, stride);
             }
             info->has_decoded_frames = true;
             av_frame_unref(info->frame);
-
-            //LOGD("frame time %lld ms", ConnectionsManager::getInstance(0).getCurrentTimeMonotonicMillis() - time);
-
             return 1;
         }
         if (!info->has_decoded_frames) {
@@ -708,6 +820,14 @@ jint videoOnJNILoad(JavaVM *vm, JNIEnv *env) {
     }
     jclass_AnimatedFileDrawableStream_cancel = env->GetMethodID(jclass_AnimatedFileDrawableStream, "cancel", "()V");
     if (jclass_AnimatedFileDrawableStream_cancel == 0) {
+        return JNI_FALSE;
+    }
+    jclass_AnimatedFileDrawableStream_isFinishedLoadingFile = env->GetMethodID(jclass_AnimatedFileDrawableStream, "isFinishedLoadingFile", "()Z");
+    if (jclass_AnimatedFileDrawableStream_isFinishedLoadingFile == 0) {
+        return JNI_FALSE;
+    }
+    jclass_AnimatedFileDrawableStream_getFinishedFilePath = env->GetMethodID(jclass_AnimatedFileDrawableStream, "getFinishedFilePath", "()Ljava/lang/String;");
+    if (jclass_AnimatedFileDrawableStream_getFinishedFilePath == 0) {
         return JNI_FALSE;
     }
 

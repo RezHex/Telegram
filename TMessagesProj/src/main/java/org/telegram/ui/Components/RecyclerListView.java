@@ -8,6 +8,8 @@
 
 package org.telegram.ui.Components;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -32,6 +34,7 @@ import android.view.SoundEffectConstants;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.FrameLayout;
 
@@ -85,6 +88,8 @@ public class RecyclerListView extends RecyclerView {
 
     private boolean hideIfEmpty = true;
 
+    private boolean drawSelectorBehind;
+    private int selectorType = 2;
     protected Drawable selectorDrawable;
     protected int selectorPosition;
     protected android.graphics.Rect selectorRect = new android.graphics.Rect();
@@ -113,7 +118,8 @@ public class RecyclerListView extends RecyclerView {
     private static boolean gotAttributes;
 
     private boolean hiddenByEmptyView;
-    public boolean animationRunning;
+    public boolean fastScrollAnimationRunning;
+    private boolean animateEmptyView;
 
     public interface OnItemClickListener {
         void onItemClick(View view, int position);
@@ -676,7 +682,7 @@ public class RecyclerListView extends RecyclerView {
                         }
                     };
                     AndroidUtilities.runOnUIThread(selectChildRunnable, ViewConfiguration.getTapTimeout());
-                    if (currentChildView.isEnabled()) {
+                    if (currentChildView.isEnabled() && canHighlightChildAt(currentChildView, x - currentChildView.getX(), y - currentChildView.getY())) {
                         positionSelector(currentChildPosition, currentChildView);
                         if (selectorDrawable != null) {
                             final Drawable d = selectorDrawable.getCurrent();
@@ -749,6 +755,10 @@ public class RecyclerListView extends RecyclerView {
         return null;
     }
 
+    protected boolean canHighlightChildAt(View child, float x, float y) {
+        return true;
+    }
+
     public void setDisableHighlightState(boolean value) {
         disableHighlightState = value;
     }
@@ -816,7 +826,7 @@ public class RecyclerListView extends RecyclerView {
     private AdapterDataObserver observer = new AdapterDataObserver() {
         @Override
         public void onChanged() {
-            checkIfEmpty();
+            checkIfEmpty(true);
             currentFirst = -1;
             if (removeHighlighSelectionRunnable == null) {
                 selectorRect.setEmpty();
@@ -826,12 +836,12 @@ public class RecyclerListView extends RecyclerView {
 
         @Override
         public void onItemRangeInserted(int positionStart, int itemCount) {
-            checkIfEmpty();
+            checkIfEmpty(true);
         }
 
         @Override
         public void onItemRangeRemoved(int positionStart, int itemCount) {
-            checkIfEmpty();
+            checkIfEmpty(true);
         }
     };
 
@@ -952,11 +962,23 @@ public class RecyclerListView extends RecyclerView {
         }
     }
 
+    public void setSelectorType(int type) {
+        selectorType = type;
+    }
+
+    public void setDrawSelectorBehind(boolean value) {
+        drawSelectorBehind = value;
+    }
+
     public void setSelectorDrawableColor(int color) {
         if (selectorDrawable != null) {
             selectorDrawable.setCallback(null);
         }
-        selectorDrawable = Theme.getSelectorDrawable(color, false);
+        if (selectorType == 2) {
+            selectorDrawable = Theme.getSelectorDrawable(color, false);
+        } else {
+            selectorDrawable = Theme.createSelectorDrawable(color, selectorType);
+        }
         selectorDrawable.setCallback(this);
     }
 
@@ -1052,11 +1074,7 @@ public class RecyclerListView extends RecyclerView {
                                         } else {
                                             headerTop = -AndroidUtilities.dp(100);
                                         }
-                                        if (headerTop < 0) {
-                                            header.setTag(headerTop);
-                                        } else {
-                                            header.setTag(0);
-                                        }
+                                        header.setTag(Math.min(headerTop, 0));
                                     } else {
                                         header.setTag(0);
                                     }
@@ -1199,13 +1217,18 @@ public class RecyclerListView extends RecyclerView {
         if (emptyView == view) {
             return;
         }
+        if (emptyView != null) {
+            emptyView.animate().setListener(null).cancel();
+        }
         emptyView = view;
         if (isHidden) {
             if (emptyView != null) {
+                emptyViewAnimateToVisibility = GONE;
                 emptyView.setVisibility(GONE);
             }
         } else {
-            checkIfEmpty();
+            emptyViewAnimateToVisibility = -1;
+            checkIfEmpty(false);
         }
     }
 
@@ -1306,7 +1329,9 @@ public class RecyclerListView extends RecyclerView {
         return super.dispatchTouchEvent(ev);
     }
 
-    private void checkIfEmpty() {
+    int emptyViewAnimateToVisibility;
+
+    private void checkIfEmpty(boolean animated) {
         if (isHidden) {
             return;
         }
@@ -1319,8 +1344,36 @@ public class RecyclerListView extends RecyclerView {
         }
         boolean emptyViewVisible = getAdapter().getItemCount() == 0;
         int newVisibility = emptyViewVisible ? VISIBLE : GONE;
-        if (emptyView.getVisibility() != newVisibility) {
+        if (!animateEmptyView || !isAttachedToWindow()) {
+            animated = false;
+        }
+        if (animated) {
+            if (emptyViewAnimateToVisibility != newVisibility) {
+                emptyViewAnimateToVisibility = newVisibility;
+                if (newVisibility == VISIBLE) {
+                    emptyView.animate().setListener(null).cancel();
+                    if (emptyView.getVisibility() == GONE) {
+                        emptyView.setVisibility(VISIBLE);
+                        emptyView.setAlpha(0);
+                    }
+                    emptyView.animate().alpha(1f).setDuration(150).start();
+                } else {
+                    if (emptyView.getVisibility() != GONE) {
+                        emptyView.animate().alpha(0).setDuration(150).setListener(new AnimatorListenerAdapter() {
+                            @Override
+                            public void onAnimationEnd(Animator animation) {
+                                if (emptyView != null) {
+                                    emptyView.setVisibility(GONE);
+                                }
+                            }
+                        }).start();
+                    }
+                }
+            }
+        } else {
+            emptyViewAnimateToVisibility = newVisibility;
             emptyView.setVisibility(newVisibility);
+            emptyView.setAlpha(1f);
         }
         if (hideIfEmpty) {
             newVisibility = emptyViewVisible ? INVISIBLE : VISIBLE;
@@ -1349,7 +1402,7 @@ public class RecyclerListView extends RecyclerView {
             return;
         }
         isHidden = false;
-        checkIfEmpty();
+        checkIfEmpty(false);
     }
 
     @Override
@@ -1563,7 +1616,7 @@ public class RecyclerListView extends RecyclerView {
         if (adapter != null) {
             adapter.registerAdapterDataObserver(observer);
         }
-        checkIfEmpty();
+        checkIfEmpty(false);
     }
 
     @Override
@@ -1653,8 +1706,12 @@ public class RecyclerListView extends RecyclerView {
 
     @Override
     protected void dispatchDraw(Canvas canvas) {
+        if (drawSelectorBehind && !selectorRect.isEmpty()) {
+            selectorDrawable.setBounds(selectorRect);
+            selectorDrawable.draw(canvas);
+        }
         super.dispatchDraw(canvas);
-        if (!selectorRect.isEmpty()) {
+        if (!drawSelectorBehind && !selectorRect.isEmpty()) {
             selectorDrawable.setBounds(selectorRect);
             selectorDrawable.draw(canvas);
         }
@@ -1751,11 +1808,51 @@ public class RecyclerListView extends RecyclerView {
         return pinnedHeader;
     }
 
+    public boolean isFastScrollAnimationRunning() {
+        return fastScrollAnimationRunning;
+    }
+
     @Override
     public void requestLayout() {
-        if (animationRunning) {
+        if (fastScrollAnimationRunning) {
             return;
         }
         super.requestLayout();
+    }
+
+    public void setAnimateEmptyView(boolean animate) {
+        animateEmptyView = animate;
+    }
+
+    public static class FoucsableOnTouchListener implements OnTouchListener {
+        private float x;
+        private float y;
+        private boolean onFocus;
+
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            ViewParent parent = v.getParent();
+            if (parent == null) {
+                return false;
+            }
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                x = event.getX();
+                y = event.getY();
+                onFocus = true;
+                parent.requestDisallowInterceptTouchEvent(true);
+            } if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                float dx = (x - event.getX());
+                float dy = (y - event.getY());
+                float touchSlop = ViewConfiguration.get(v.getContext()).getScaledTouchSlop();
+                if (onFocus && Math.sqrt(dx * dx + dy * dy) >touchSlop) {
+                    onFocus = false;
+                    parent.requestDisallowInterceptTouchEvent(false);
+                }
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                onFocus = false;
+                parent.requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        }
     }
 }

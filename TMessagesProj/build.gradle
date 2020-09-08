@@ -15,30 +15,36 @@ configurations.all {
 }
 
 dependencies {
-    implementation 'androidx.core:core:1.1.0-beta01'
+    implementation 'androidx.core:core:1.3.1'
     implementation 'androidx.palette:palette:1.0.0'
-    implementation 'androidx.exifinterface:exifinterface:1.1.0'
+    implementation 'androidx.exifinterface:exifinterface:1.2.0'
+    implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation "androidx.sharetarget:sharetarget:1.0.0"
 
     compileOnly 'org.checkerframework:checker-qual:2.5.2'
     compileOnly 'org.checkerframework:checker-compat-qual:2.5.0'
-    implementation 'com.google.firebase:firebase-messaging:20.1.0'
-    implementation 'com.google.firebase:firebase-config:19.1.1'
+    implementation 'com.google.firebase:firebase-messaging:20.2.4'
+    implementation 'com.google.firebase:firebase-config:19.2.0'
+    implementation 'com.google.firebase:firebase-datatransport:17.0.6'
     implementation 'com.google.android.gms:play-services-maps:17.0.0'
-    implementation 'com.google.android.gms:play-services-auth:17.0.0'
+    implementation 'com.google.android.gms:play-services-auth:18.1.0'
     implementation 'com.google.android.gms:play-services-vision:16.2.0'
-    implementation 'com.google.android.gms:play-services-wallet:17.0.0'
     implementation 'com.google.android.gms:play-services-wearable:17.0.0'
     implementation 'com.google.android.gms:play-services-location:17.0.0'
-    implementation 'net.hockeyapp.android:HockeySDK:5.2.0'
+    implementation "com.microsoft.appcenter:appcenter-distribute:3.2.2"
+    implementation "com.microsoft.appcenter:appcenter-crashes:3.2.2"
     implementation 'com.googlecode.mp4parser:isoparser:1.0.6'
     implementation 'com.stripe:stripe-android:2.0.2'
     implementation files('libs/libgsaverification-client.aar')
+
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.0.10'
 }
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion '29.0.2'
-    ndkVersion "20.0.5594570"
+    compileSdkVersion 30
+    buildToolsVersion '30.0.2'
+    ndkVersion "21.1.6352462"
 
     defaultConfig.applicationId = "org.telegram.messenger"
 
@@ -63,6 +69,8 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+
+        coreLibraryDesugaringEnabled true
     }
 
     signingConfigs {
@@ -88,6 +96,7 @@ android {
             signingConfig signingConfigs.debug
             applicationIdSuffix ".beta"
             minifyEnabled true
+            multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
 
@@ -97,6 +106,7 @@ android {
             signingConfig signingConfigs.debug
             applicationIdSuffix ".beta"
             minifyEnabled true
+            multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
 
             packagingOptions {
@@ -119,22 +129,13 @@ android {
             }
         }*/
 
-        debugMultidex {
-            initWith debug
-            minifyEnabled false
-            multiDexEnabled true
-            dependencies {
-                implementation 'com.android.support:multidex:1.0.3'
-            }
-            manifestPlaceholders = [applicationClassName: "MultiDexApplicationLoader"]
-        }
-
         HA {
             debuggable false
             jniDebuggable false
             signingConfig signingConfigs.debug
             applicationIdSuffix ".beta"
             minifyEnabled true
+            multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
 
@@ -144,6 +145,7 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources false
+            multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
@@ -155,11 +157,6 @@ android {
     /*sourceSets.debugAsan {
         manifest.srcFile 'config/debug/AndroidManifest.xml'
     }*/
-
-    sourceSets.debugMultidex {
-        manifest.srcFile 'config/debug/AndroidManifest.xml'
-        java.srcDirs = ['src/multidex/java']
-    }
 
     sourceSets.HA {
         manifest.srcFile 'config/debug/AndroidManifest.xml'
@@ -283,7 +280,7 @@ android {
         }
     }
 
-    defaultConfig.versionCode = 1869
+    defaultConfig.versionCode = 2065
 
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
@@ -318,18 +315,16 @@ android {
     defaultConfig {
         minSdkVersion 16
         targetSdkVersion 28
-        versionName "5.15.0"
+        versionName "7.0.1"
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
         externalNativeBuild {
             ndkBuild {
-                arguments "NDK_APPLICATION_MK:=jni/Application.mk", "APP_PLATFORM:=android-16", "--jobs=8"
+                arguments "NDK_APPLICATION_MK:=jni/Application.mk", "APP_PLATFORM:=android-16", "--jobs=16"
                 abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
             }
         }
-
-        manifestPlaceholders = [applicationClassName: "ApplicationLoader"]
     }
 }
 

@@ -441,12 +441,12 @@ public class LocaleController {
         return currentLocaleInfo.isLocal();
     }
 
-    public void reloadCurrentRemoteLocale(int currentAccount, String langCode) {
+    public void reloadCurrentRemoteLocale(int currentAccount, String langCode, boolean force) {
         if (langCode != null) {
             langCode = langCode.replace("-", "_");
         }
         if (langCode == null || currentLocaleInfo != null && (langCode.equals(currentLocaleInfo.shortName) || langCode.equals(currentLocaleInfo.baseLangCode))) {
-            applyRemoteLanguage(currentLocaleInfo, langCode, true, currentAccount);
+            applyRemoteLanguage(currentLocaleInfo, langCode, force, currentAccount);
         }
     }
 
@@ -905,9 +905,9 @@ public class LocaleController {
             changingConfiguration = false;
             if (reloadLastFile) {
                 if (init) {
-                    AndroidUtilities.runOnUIThread(() -> reloadCurrentRemoteLocale(currentAccount, null));
+                    AndroidUtilities.runOnUIThread(() -> reloadCurrentRemoteLocale(currentAccount, null, force));
                 } else {
-                    reloadCurrentRemoteLocale(currentAccount, null);
+                    reloadCurrentRemoteLocale(currentAccount, null, force);
                 }
                 reloadLastFile = false;
             }
@@ -955,6 +955,17 @@ public class LocaleController {
 
     public static String getString(String key, int res) {
         return getInstance().getStringInternal(key, res);
+    }
+
+    public static String getString(String key) {
+        if (TextUtils.isEmpty(key)) {
+            return "LOC_ERR:" + key;
+        }
+        int resourceId = ApplicationLoader.applicationContext.getResources().getIdentifier(key, "string", ApplicationLoader.applicationContext.getPackageName());
+        if (resourceId != 0) {
+            return getString(key, resourceId);
+        }
+        return getServerString(key);
     }
 
     public static String getPluralString(String key, int plural) {
@@ -1204,6 +1215,32 @@ public class LocaleController {
         }
     }
 
+    public static String formatDuration(int duration) {
+        if (duration <= 0) {
+            return formatPluralString("Seconds", 0);
+        }
+        final int hours = duration / 3600;
+        final int minutes = duration / 60 % 60;
+        final int seconds = duration % 60;
+        final StringBuilder stringBuilder = new StringBuilder();
+        if (hours > 0) {
+            stringBuilder.append(formatPluralString("Hours", hours));
+        }
+        if (minutes > 0) {
+            if (stringBuilder.length() > 0) {
+                stringBuilder.append(' ');
+            }
+            stringBuilder.append(formatPluralString("Minutes", minutes));
+        }
+        if (seconds > 0) {
+            if (stringBuilder.length() > 0) {
+                stringBuilder.append(' ');
+            }
+            stringBuilder.append(formatPluralString("Seconds", seconds));
+        }
+        return stringBuilder.toString();
+    }
+
     public static String formatCallDuration(int duration) {
         if (duration > 3600) {
             String result = LocaleController.formatPluralString("Hours", duration / 3600);
@@ -1303,7 +1340,7 @@ public class LocaleController {
         return "LOC_ERR: formatDate";
     }
 
-    public static String formatDateAudio(long date) {
+    public static String formatDateAudio(long date, boolean shortFormat) {
         try {
             date *= 1000;
             Calendar rightNow = Calendar.getInstance();
@@ -1314,7 +1351,11 @@ public class LocaleController {
             int dateYear = rightNow.get(Calendar.YEAR);
 
             if (dateDay == day && year == dateYear) {
-                return LocaleController.formatString("TodayAtFormatted", R.string.TodayAtFormatted, getInstance().formatterDay.format(new Date(date)));
+                if (shortFormat) {
+                    return LocaleController.formatString("TodayAtFormatted", R.string.TodayAtFormatted, getInstance().formatterDay.format(new Date(date)));
+                } else {
+                    return LocaleController.formatString("TodayAtFormattedWithToday", R.string.TodayAtFormattedWithToday, getInstance().formatterDay.format(new Date(date)));
+                }
             } else if (dateDay + 1 == day && year == dateYear) {
                 return LocaleController.formatString("YesterdayAtFormatted", R.string.YesterdayAtFormatted, getInstance().formatterDay.format(new Date(date)));
             } else if (Math.abs(System.currentTimeMillis() - date) < 31536000000L) {
@@ -1601,6 +1642,22 @@ public class LocaleController {
 
     public static String formatUserStatus(int currentAccount, TLRPC.User user) {
         return formatUserStatus(currentAccount, user, null);
+    }
+
+    public static String formatJoined(long date) {
+        try {
+            date *= 1000;
+            String format;
+            if (Math.abs(System.currentTimeMillis() - date) < 31536000000L) {
+                format = LocaleController.formatString("formatDateAtTime", R.string.formatDateAtTime, getInstance().formatterDayMonth.format(new Date(date)), getInstance().formatterDay.format(new Date(date)));
+            } else {
+                format = LocaleController.formatString("formatDateAtTime", R.string.formatDateAtTime, getInstance().formatterYear.format(new Date(date)), getInstance().formatterDay.format(new Date(date)));
+            }
+            return formatString("ChannelOtherSubscriberJoined", R.string.ChannelOtherSubscriberJoined, format);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return "LOC_ERR";
     }
 
     public static String formatUserStatus(int currentAccount, TLRPC.User user, boolean[] isOnline) {
@@ -2754,7 +2811,7 @@ public class LocaleController {
         useImperialSystemType = null;
     }
 
-    public static String formatDistance(float distance) {
+    public static String formatDistance(float distance, int type) {
         if (useImperialSystemType == null) {
             if (SharedConfig.distanceSystemType == 0) {
                 try {
@@ -2774,7 +2831,13 @@ public class LocaleController {
         if (useImperialSystemType) {
             distance *= 3.28084f;
             if (distance < 1000) {
-                return formatString("FootsAway", R.string.FootsAway, String.format("%d", (int) Math.max(1, distance)));
+                switch (type) {
+                    case 0:
+                        return formatString("FootsAway", R.string.FootsAway, String.format("%d", (int) Math.max(1, distance)));
+                    case 1:
+                    default:
+                        return formatString("FootsFromYou", R.string.FootsFromYou, String.format("%d", (int) Math.max(1, distance)));
+                }
             } else {
                 String arg;
                 if (distance % 5280 == 0) {
@@ -2782,11 +2845,24 @@ public class LocaleController {
                 } else {
                     arg = String.format("%.2f", distance / 5280.0f);
                 }
-                return formatString("MilesAway", R.string.MilesAway, arg);
+                switch (type) {
+                    case 0:
+                        return formatString("MilesAway", R.string.MilesAway, arg);
+                    case 1:
+                    default:
+                        return formatString("MilesFromYou", R.string.MilesFromYou, arg);
+                }
+
             }
         } else {
             if (distance < 1000) {
-                return formatString("MetersAway2", R.string.MetersAway2, String.format("%d", (int) Math.max(1, distance)));
+                switch (type) {
+                    case 0:
+                        return formatString("MetersAway2", R.string.MetersAway2, String.format("%d", (int) Math.max(1, distance)));
+                    case 1:
+                    default:
+                        return formatString("MetersFromYou2", R.string.MetersFromYou2, String.format("%d", (int) Math.max(1, distance)));
+                }
             } else {
                 String arg;
                 if (distance % 1000 == 0) {
@@ -2794,7 +2870,13 @@ public class LocaleController {
                 } else {
                     arg = String.format("%.2f", distance / 1000.0f);
                 }
-                return formatString("KMetersAway2", R.string.KMetersAway2, arg);
+                switch (type) {
+                    case 0:
+                        return formatString("KMetersAway2", R.string.KMetersAway2, arg);
+                    case 1:
+                    default:
+                        return formatString("KMetersFromYou2", R.string.KMetersFromYou2, arg);
+                }
             }
         }
     }

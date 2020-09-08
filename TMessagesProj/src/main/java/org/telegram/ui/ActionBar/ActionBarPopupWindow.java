@@ -224,6 +224,10 @@ public class ActionBarPopupWindow extends PopupWindow {
             linearLayout.addView(child);
         }
 
+        public void addView(View child, LinearLayout.LayoutParams layoutParams) {
+            linearLayout.addView(child, layoutParams);
+        }
+
         public void removeInnerViews() {
             linearLayout.removeAllViews();
         }
@@ -273,6 +277,14 @@ public class ActionBarPopupWindow extends PopupWindow {
         public void scrollToTop() {
             if (scrollView != null) {
                 scrollView.scrollTo(0, 0);
+            }
+        }
+
+        public void setupRadialSelectors(int color) {
+            int count = linearLayout.getChildCount();
+            for (int a = 0; a < count; a++) {
+                View child = linearLayout.getChildAt(a);
+                child.setBackground(Theme.createRadSelectorDrawable(color, a == 0 ? 6 : 0, a == count - 1 ? 6 : 0));
             }
         }
     }

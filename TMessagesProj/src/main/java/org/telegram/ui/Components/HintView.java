@@ -19,6 +19,7 @@ import org.telegram.messenger.ImageReceiver;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.R;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.SimpleTextView;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Cells.ChatMessageCell;
@@ -42,6 +43,7 @@ public class HintView extends FrameLayout {
     private String overrideText;
     private int shownY;
 
+    private int bottomOffset;
     private long showingDuration = 2000;
 
     public HintView(Context context, int type) {
@@ -127,7 +129,7 @@ public class HintView extends FrameLayout {
         if (currentType == 0) {
             ImageReceiver imageReceiver = cell.getPhotoImage();
             top += imageReceiver.getImageY();
-            int height = imageReceiver.getImageHeight();
+            int height = (int) imageReceiver.getImageHeight();
             int bottom = top + height;
             int parentHeight = parentView.getMeasuredHeight();
             if (top <= getMeasuredHeight() + AndroidUtilities.dp(10) || bottom > parentHeight + height / 4) {
@@ -166,9 +168,14 @@ public class HintView extends FrameLayout {
             }
             measure(MeasureSpec.makeMeasureSpec(1000, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(1000, MeasureSpec.AT_MOST));
 
-            top += AndroidUtilities.dp(22);
-            if (!messageObject.isOutOwner() && cell.isDrawNameLayout()) {
-                top += AndroidUtilities.dp(20);
+            TLRPC.User user = cell.getCurrentUser();
+            if (user != null && user.id == 0) {
+                top += (cell.getMeasuredHeight() - Math.max(0, cell.getBottom() - parentView.getMeasuredHeight()) - AndroidUtilities.dp(50));
+            } else {
+                top += AndroidUtilities.dp(22);
+                if (!messageObject.isOutOwner() && cell.isDrawNameLayout()) {
+                    top += AndroidUtilities.dp(20);
+                }
             }
             if (!isTopArrow && top <= getMeasuredHeight() + AndroidUtilities.dp(10)) {
                 return false;
@@ -278,6 +285,8 @@ public class HintView extends FrameLayout {
         parentView.getLocationInWindow(position);
         centerX -= position[0];
         top -= position[1];
+
+        top -= bottomOffset;
 
         int parentWidth = parentView.getMeasuredWidth();
         if (isTopArrow) {
@@ -396,5 +405,9 @@ public class HintView extends FrameLayout {
 
     public void setShowingDuration(long showingDuration) {
         this.showingDuration = showingDuration;
+    }
+
+    public void setBottomOffset(int offset) {
+        this.bottomOffset = offset;
     }
 }

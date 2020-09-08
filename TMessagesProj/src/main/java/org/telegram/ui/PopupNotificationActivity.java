@@ -114,6 +114,7 @@ public class PopupNotificationActivity extends Activity implements NotificationC
     private boolean finished = false;
     private CharSequence lastPrintString;
     private MessageObject currentMessageObject = null;
+    private MessageObject[] setMessageObjects = new MessageObject[3];
     private int currentMessageNum = 0;
     private PowerManager.WakeLock wakeLock = null;
     private boolean animationInProgress = false;
@@ -187,7 +188,7 @@ public class PopupNotificationActivity extends Activity implements NotificationC
 
                 setMeasuredDimension(widthSize, heightSize);
 
-                int keyboardSize = getKeyboardHeight();
+                int keyboardSize = measureKeyboardHeight();
 
                 if (keyboardSize <= AndroidUtilities.dp(20)) {
                     heightSize -= chatActivityEnterView.getEmojiPadding();
@@ -213,7 +214,7 @@ public class PopupNotificationActivity extends Activity implements NotificationC
             protected void onLayout(boolean changed, int l, int t, int r, int b) {
                 final int count = getChildCount();
 
-                int paddingBottom = getKeyboardHeight() <= AndroidUtilities.dp(20) ? chatActivityEnterView.getEmojiPadding() : 0;
+                int paddingBottom = measureKeyboardHeight() <= AndroidUtilities.dp(20) ? chatActivityEnterView.getEmojiPadding() : 0;
 
                 for (int i = 0; i < count; i++) {
                     final View child = getChildAt(i);
@@ -390,7 +391,7 @@ public class PopupNotificationActivity extends Activity implements NotificationC
             }
 
             @Override
-            public void didPressedAttachButton() {
+            public void didPressAttachButton() {
 
             }
 
@@ -421,6 +422,11 @@ public class PopupNotificationActivity extends Activity implements NotificationC
 
             @Override
             public void onSendLongClick() {
+
+            }
+
+            @Override
+            public void onAudioVideoInterfaceUpdated() {
 
             }
         });
@@ -1120,6 +1126,21 @@ public class PopupNotificationActivity extends Activity implements NotificationC
                 }
             }
         }
+        for (int a = 0; a < 3; a++) {
+            int num = currentMessageNum - 1 + a;
+            MessageObject messageObject;
+            if (popupMessages.size() == 1 && (num < 0 || num >= popupMessages.size())) {
+                messageObject = null;
+            } else {
+                if (num == -1) {
+                    num = popupMessages.size() - 1;
+                } else if (num == popupMessages.size()) {
+                    num = 0;
+                }
+                messageObject = popupMessages.get(num);
+            }
+            setMessageObjects[a] = messageObject;
+        }
     }
 
     private void fixLayout() {
@@ -1437,6 +1458,25 @@ public class PopupNotificationActivity extends Activity implements NotificationC
                     }
                 }
                 getNewMessage();
+                if (!popupMessages.isEmpty()) {
+                    for (int a = 0; a < 3; a++) {
+                        int num = currentMessageNum - 1 + a;
+                        MessageObject messageObject;
+                        if (popupMessages.size() == 1 && (num < 0 || num >= popupMessages.size())) {
+                            messageObject = null;
+                        } else {
+                            if (num == -1) {
+                                num = popupMessages.size() - 1;
+                            } else if (num == popupMessages.size()) {
+                                num = 0;
+                            }
+                            messageObject = popupMessages.get(num);
+                        }
+                        if (setMessageObjects[a] != messageObject) {
+                            updateInterfaceForCurrentMessage(0);
+                        }
+                    }
+                }
             }
         } else if (id == NotificationCenter.updateInterfaces) {
             if (currentMessageObject == null || account != lastResumedAccount) {

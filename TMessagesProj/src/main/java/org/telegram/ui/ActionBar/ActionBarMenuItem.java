@@ -80,8 +80,9 @@ public class ActionBarMenuItem extends FrameLayout {
         }
     }
 
-    public interface ActionBarSumMenuItemDelegate {
+    public interface ActionBarSubMenuItemDelegate {
         void onShowSubMenu();
+        void onHideSubMenu();
     }
 
     public interface ActionBarMenuItemDelegate {
@@ -106,7 +107,7 @@ public class ActionBarMenuItem extends FrameLayout {
     private int subMenuOpenSide;
     private int yOffset;
     private ActionBarMenuItemDelegate delegate;
-    private ActionBarSumMenuItemDelegate subMenuDelegate;
+    private ActionBarSubMenuItemDelegate subMenuDelegate;
     private boolean allowCloseAnimation = true;
     protected boolean overrideMenuClick;
     private boolean processedPopupClick;
@@ -120,6 +121,8 @@ public class ActionBarMenuItem extends FrameLayout {
     private boolean animateClear = true;
     private boolean clearsTextOnSearchCollapse = true;
     private boolean measurePopup = true;
+    private boolean forceSmoothKeyboard;
+    private boolean showSubmenuByMove = true;
 
     public ActionBarMenuItem(Context context, ActionBarMenu menu, int backgroundColor, int iconColor) {
         this(context, menu, backgroundColor, iconColor, false);
@@ -138,6 +141,7 @@ public class ActionBarMenuItem extends FrameLayout {
             textView.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
             textView.setGravity(Gravity.CENTER);
             textView.setPadding(AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4), 0);
+            textView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             if (iconColor != 0) {
                 textView.setTextColor(iconColor);
             }
@@ -145,6 +149,7 @@ public class ActionBarMenuItem extends FrameLayout {
         } else {
             iconView = new ImageView(context);
             iconView.setScaleType(ImageView.ScaleType.CENTER);
+            iconView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             addView(iconView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
             if (iconColor != 0) {
                 iconView.setColorFilter(new PorterDuffColorFilter(iconColor, PorterDuff.Mode.MULTIPLY));
@@ -169,7 +174,7 @@ public class ActionBarMenuItem extends FrameLayout {
                 AndroidUtilities.runOnUIThread(showMenuRunnable, 200);
             }
         } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-            if (hasSubMenu() && (popupWindow == null || popupWindow != null && !popupWindow.isShowing())) {
+            if (showSubmenuByMove && hasSubMenu() && (popupWindow == null || popupWindow != null && !popupWindow.isShowing())) {
                 if (event.getY() > getHeight()) {
                     if (getParent() != null) {
                         getParent().requestDisallowInterceptTouchEvent(true);
@@ -234,8 +239,12 @@ public class ActionBarMenuItem extends FrameLayout {
         delegate = actionBarMenuItemDelegate;
     }
 
-    public void setSubMenuDelegate(ActionBarSumMenuItemDelegate actionBarSumMenuItemDelegate) {
-        subMenuDelegate = actionBarSumMenuItemDelegate;
+    public void setSubMenuDelegate(ActionBarSubMenuItemDelegate actionBarSubMenuItemDelegate) {
+        subMenuDelegate = actionBarSubMenuItemDelegate;
+    }
+
+    public void setShowSubmenuByMove(boolean value) {
+        showSubmenuByMove = value;
     }
 
     public void setIconColor(int color) {
@@ -256,6 +265,10 @@ public class ActionBarMenuItem extends FrameLayout {
 
     public void setLayoutInScreen(boolean value) {
         layoutInScreen = value;
+    }
+
+    public void setForceSmoothKeyboard(boolean value) {
+        forceSmoothKeyboard = value;
     }
 
     private void createPopupLayout() {
@@ -288,6 +301,13 @@ public class ActionBarMenuItem extends FrameLayout {
             return;
         }
         popupLayout.removeInnerViews();
+    }
+
+    public void setShowedFromBottom(boolean value) {
+        if (popupLayout == null) {
+            return;
+        }
+        popupLayout.setShowedFromBotton(value);
     }
 
     public void addSubItem(View view, int width, int height) {
@@ -364,9 +384,13 @@ public class ActionBarMenuItem extends FrameLayout {
     }
 
     public ActionBarMenuSubItem addSubItem(int id, int icon, CharSequence text) {
+        return addSubItem(id, icon, text, false);
+    }
+
+    public ActionBarMenuSubItem addSubItem(int id, int icon, CharSequence text, boolean needCheck) {
         createPopupLayout();
 
-        ActionBarMenuSubItem cell = new ActionBarMenuSubItem(getContext());
+        ActionBarMenuSubItem cell = new ActionBarMenuSubItem(getContext(), needCheck);
         cell.setTextAndIcon(text, icon);
         cell.setMinimumWidth(AndroidUtilities.dp(196));
         cell.setTag(id);
@@ -484,7 +508,12 @@ public class ActionBarMenuItem extends FrameLayout {
                 }
                 return false;
             });
-            popupWindow.setOnDismissListener(this::onDismiss);
+            popupWindow.setOnDismissListener(() -> {
+                onDismiss();
+                if (subMenuDelegate != null) {
+                    subMenuDelegate.onHideSubMenu();
+                }
+            });
         }
         if (measurePopup) {
             popupLayout.measure(MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.x - AndroidUtilities.dp(40), MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.y, MeasureSpec.AT_MOST));
@@ -511,6 +540,10 @@ public class ActionBarMenuItem extends FrameLayout {
 
     }
 
+    public boolean isSearchFieldVisible() {
+        return searchContainer.getVisibility() == VISIBLE;
+    }
+
     public boolean toggleSearch(boolean openKeyboard) {
         if (searchContainer == null) {
             return false;
@@ -524,20 +557,23 @@ public class ActionBarMenuItem extends FrameLayout {
             }
         }
         if (searchContainer.getVisibility() == VISIBLE) {
-            if (openKeyboard) {
-                AndroidUtilities.hideKeyboard(searchField);
-            }
-            if (clearsTextOnSearchCollapse) {
-                searchField.setText("");
-            }
             searchContainer.setVisibility(GONE);
             searchField.clearFocus();
             setVisibility(VISIBLE);
             if (listener != null) {
                 listener.onSearchCollapse();
             }
+            if (openKeyboard) {
+                AndroidUtilities.hideKeyboard(searchField);
+            }
+            if (clearsTextOnSearchCollapse) {
+                searchField.setText("");
+            }
             return false;
         } else {
+            if (listener != null) {
+                listener.onSearchExpand();
+            }
             searchContainer.setVisibility(VISIBLE);
             setVisibility(GONE);
             searchField.setText("");
@@ -545,15 +581,16 @@ public class ActionBarMenuItem extends FrameLayout {
             if (openKeyboard) {
                 AndroidUtilities.showKeyboard(searchField);
             }
-            if (listener != null) {
-                listener.onSearchExpand();
-            }
             return true;
         }
     }
 
     public void setClearsTextOnSearchCollapse(boolean value) {
         clearsTextOnSearchCollapse = value;
+    }
+
+    public boolean isSubMenuShowing() {
+        return popupWindow != null && popupWindow.isShowing();
     }
 
     public void closeSubMenu() {
@@ -571,6 +608,10 @@ public class ActionBarMenuItem extends FrameLayout {
 
     public ImageView getIconView() {
         return iconView;
+    }
+
+    public TextView getTextView() {
+        return textView;
     }
 
     public void setIcon(int resId) {
@@ -924,7 +965,7 @@ public class ActionBarMenuItem extends FrameLayout {
         int offsetY;
 
         if (parentMenu != null) {
-            offsetY = -parentMenu.parentActionBar.getMeasuredHeight() + parentMenu.getTop() + parentMenu.getPaddingTop() - (int) parentMenu.parentActionBar.getTranslationY();
+            offsetY = -parentMenu.parentActionBar.getMeasuredHeight() + parentMenu.getTop() + parentMenu.getPaddingTop()/* - (int) parentMenu.parentActionBar.getTranslationY()*/;
         } else {
             float scaleY = getScaleY();
             offsetY = -(int) (getMeasuredHeight() * scaleY - (subMenuOpenSide != 2 ? getTranslationY() : 0) / scaleY) + additionalYOffset;
@@ -956,7 +997,11 @@ public class ActionBarMenuItem extends FrameLayout {
                 }
             } else {
                 if (show) {
-                    popupWindow.showAsDropDown(parent, getLeft() - AndroidUtilities.dp(8) + (int) getTranslationX(), offsetY);
+                    if (forceSmoothKeyboard) {
+                        popupWindow.showAtLocation(parent, Gravity.LEFT | Gravity.TOP, getLeft() - AndroidUtilities.dp(8) + (int) getTranslationX(), offsetY);
+                    } else {
+                        popupWindow.showAsDropDown(parent, getLeft() - AndroidUtilities.dp(8) + (int) getTranslationX(), offsetY);
+                    }
                 }
                 if (update) {
                     popupWindow.update(parent, getLeft() - AndroidUtilities.dp(8) + (int) getTranslationX(), offsetY, -1, -1);
@@ -1040,6 +1085,13 @@ public class ActionBarMenuItem extends FrameLayout {
     @Override
     public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
         super.onInitializeAccessibilityNodeInfo(info);
-        info.setClassName("android.widget.ImageButton");
+        if (iconView != null) {
+            info.setClassName("android.widget.ImageButton");
+        } else if (textView != null) {
+            info.setClassName("android.widget.Button");
+            if (TextUtils.isEmpty(info.getText())) {
+                info.setText(textView.getText());
+            }
+        }
     }
 }

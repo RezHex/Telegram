@@ -22,6 +22,8 @@ import android.graphics.Rect;
 import android.os.Build;
 import android.os.SystemClock;
 import androidx.annotation.Keep;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
+
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
@@ -338,6 +340,14 @@ public class EditTextBoldCursor extends EditText {
 
     public void setSupportRtlHint(boolean value) {
         supportRtlHint = value;
+    }
+
+    @Override
+    protected void onScrollChanged(int horiz, int vert, int oldHoriz, int oldVert) {
+        super.onScrollChanged(horiz, vert, oldHoriz, oldVert);
+        if (horiz != oldHoriz) {
+            getParent().requestDisallowInterceptTouchEvent(true);
+        }
     }
 
     @Override
@@ -723,7 +733,7 @@ public class EditTextBoldCursor extends EditText {
         super.onInitializeAccessibilityNodeInfo(info);
         info.setClassName("android.widget.EditText");
         if (hintLayout != null) {
-            info.setContentDescription(hintLayout.getText());
+            AccessibilityNodeInfoCompat.wrap(info).setHintText(hintLayout.getText());
         }
     }
 }

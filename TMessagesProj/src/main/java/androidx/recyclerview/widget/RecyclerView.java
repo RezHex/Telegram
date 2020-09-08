@@ -59,6 +59,9 @@ import android.widget.LinearLayout;
 import android.widget.OverScroller;
 
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.BuildConfig;
+import org.telegram.messenger.BuildVars;
+import org.telegram.messenger.FileLog;
 
 import androidx.annotation.CallSuper;
 import androidx.annotation.IntDef;
@@ -212,7 +215,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
 
     static final String TAG = "RecyclerView";
 
-    static final boolean DEBUG = false;
+    static final boolean DEBUG = BuildVars.DEBUG_VERSION;
 
     static final boolean VERBOSE_TRACING = false;
 
@@ -363,7 +366,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
 
     private final RecyclerViewDataObserver mObserver = new RecyclerViewDataObserver();
 
-    final Recycler mRecycler = new Recycler();
+    public final Recycler mRecycler = new Recycler();
 
     private SavedState mPendingSavedState;
 
@@ -375,7 +378,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
     /**
      * Handles abstraction between LayoutManager children and RecyclerView children
      */
-    ChildHelper mChildHelper;
+    public ChildHelper mChildHelper;
 
     /**
      * Keeps data about views to be used for animations
@@ -1235,6 +1238,16 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
         mState.mStructureChanged = true;
     }
 
+    public void prepareForFastScroll() {
+        stopScroll();
+        removeAndRecycleViews();
+        mAdapterHelper.reset();
+        mRecycler.onAdapterChanged(mAdapter, mAdapter, false);
+        mState.mStructureChanged = true;
+        mChildHelper.removeAllViewsUnfiltered();
+        mRecycler.updateViewCacheSize();
+    }
+
     /**
      * Retrieves the previously set adapter or null if no adapter is set.
      *
@@ -1559,7 +1572,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
         if (state == mScrollState) {
             return;
         }
-        if (DEBUG) {
+        if (false) {
             Log.d(TAG, "setting scroll state to " + state + " from " + mScrollState,
                     new Exception());
         }
@@ -4083,48 +4096,60 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
             // Step 3: Find out where things are now, and process change animations.
             // traverse list in reverse because we may call animateChange in the loop which may
             // remove the target view holder.
-            for (int i = mChildHelper.getChildCount() - 1; i >= 0; i--) {
-                ViewHolder holder = getChildViewHolderInt(mChildHelper.getChildAt(i));
-                if (holder.shouldIgnore()) {
-                    continue;
-                }
-                long key = getChangedHolderKey(holder);
-                final ItemHolderInfo animationInfo = mItemAnimator
-                        .recordPostLayoutInformation(mState, holder);
-                ViewHolder oldChangeViewHolder = mViewInfoStore.getFromOldChangeHolders(key);
-                if (oldChangeViewHolder != null && !oldChangeViewHolder.shouldIgnore()) {
-                    // run a change animation
-
-                    // If an Item is CHANGED but the updated version is disappearing, it creates
-                    // a conflicting case.
-                    // Since a view that is marked as disappearing is likely to be going out of
-                    // bounds, we run a change animation. Both views will be cleaned automatically
-                    // once their animations finish.
-                    // On the other hand, if it is the same view holder instance, we run a
-                    // disappearing animation instead because we are not going to rebind the updated
-                    // VH unless it is enforced by the layout manager.
-                    final boolean oldDisappearing = mViewInfoStore.isDisappearing(
-                            oldChangeViewHolder);
-                    final boolean newDisappearing = mViewInfoStore.isDisappearing(holder);
-                    if (oldDisappearing && oldChangeViewHolder == holder) {
-                        // run disappear animation instead of change
-                        mViewInfoStore.addToPostLayout(holder, animationInfo);
-                    } else {
-                        final ItemHolderInfo preInfo = mViewInfoStore.popFromPreLayout(
-                                oldChangeViewHolder);
-                        // we add and remove so that any post info is merged.
-                        mViewInfoStore.addToPostLayout(holder, animationInfo);
-                        ItemHolderInfo postInfo = mViewInfoStore.popFromPostLayout(holder);
-                        if (preInfo == null) {
-                            handleMissingPreInfoForChangeError(key, holder, oldChangeViewHolder);
-                        } else {
-                            animateChange(oldChangeViewHolder, holder, preInfo, postInfo,
-                                    oldDisappearing, newDisappearing);
-                        }
+            try {
+                for (int i = mChildHelper.getChildCount() - 1; i >= 0; i--) {
+                    ViewHolder holder = getChildViewHolderInt(mChildHelper.getChildAt(i));
+                    if (holder.shouldIgnore()) {
+                        continue;
                     }
-                } else {
-                    mViewInfoStore.addToPostLayout(holder, animationInfo);
+                    long key = getChangedHolderKey(holder);
+                    final ItemHolderInfo animationInfo = mItemAnimator
+                            .recordPostLayoutInformation(mState, holder);
+                    ViewHolder oldChangeViewHolder = mViewInfoStore.getFromOldChangeHolders(key);
+                    if (oldChangeViewHolder != null && !oldChangeViewHolder.shouldIgnore()) {
+                        // run a change animation
+
+                        // If an Item is CHANGED but the updated version is disappearing, it creates
+                        // a conflicting case.
+                        // Since a view that is marked as disappearing is likely to be going out of
+                        // bounds, we run a change animation. Both views will be cleaned automatically
+                        // once their animations finish.
+                        // On the other hand, if it is the same view holder instance, we run a
+                        // disappearing animation instead because we are not going to rebind the updated
+                        // VH unless it is enforced by the layout manager.
+                        final boolean oldDisappearing = mViewInfoStore.isDisappearing(
+                                oldChangeViewHolder);
+                        final boolean newDisappearing = mViewInfoStore.isDisappearing(holder);
+                        if (oldDisappearing && oldChangeViewHolder == holder) {
+                            // run disappear animation instead of change
+                            mViewInfoStore.addToPostLayout(holder, animationInfo);
+                        } else {
+                            final ItemHolderInfo preInfo = mViewInfoStore.popFromPreLayout(
+                                    oldChangeViewHolder);
+                            // we add and remove so that any post info is merged.
+                            mViewInfoStore.addToPostLayout(holder, animationInfo);
+                            ItemHolderInfo postInfo = mViewInfoStore.popFromPostLayout(holder);
+                            if (preInfo == null) {
+                                handleMissingPreInfoForChangeError(key, holder, oldChangeViewHolder);
+                            } else {
+                                animateChange(oldChangeViewHolder, holder, preInfo, postInfo,
+                                        oldDisappearing, newDisappearing);
+                            }
+                        }
+                    } else {
+                        mViewInfoStore.addToPostLayout(holder, animationInfo);
+                    }
                 }
+            } catch (Exception e) {
+                StringBuilder builder = new StringBuilder();
+                for (int i = mChildHelper.getChildCount() - 1; i >= 0; i--) {
+                    ViewHolder holder = getChildViewHolderInt(mChildHelper.getChildAt(i));
+                    if (holder.shouldIgnore()) {
+                        continue;
+                    }
+                    builder.append("Holder at" + i + " " + holder + "\n");
+                }
+                throw new RuntimeException(builder.toString(), e);
             }
 
             // Step 4: Process view info lists and trigger animations
@@ -4471,8 +4496,8 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
         for (int i = 0; i < childCount; i++) {
             final ViewHolder holder = getChildViewHolderInt(mChildHelper.getUnfilteredChildAt(i));
             if (DEBUG && holder.mPosition == -1 && !holder.isRemoved()) {
-                throw new IllegalStateException("view holder cannot have position -1 unless it"
-                        + " is removed" + exceptionLabel());
+                FileLog.e(new IllegalStateException("view holder cannot have position -1 unless it"
+                        + " is removed" + exceptionLabel()));
             }
             if (!holder.shouldIgnore()) {
                 holder.saveOldPosition();
@@ -9731,7 +9756,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
          * @return The array containing the scroll amount in x and y directions that brings the
          * given rect into RV's padded area.
          */
-        private int[] getChildRectangleOnScreenScrollAmount(View child, Rect rect) {
+        protected int[] getChildRectangleOnScreenScrollAmount(View child, Rect rect) {
             int[] out = new int[2];
             final int parentLeft = getPaddingLeft();
             final int parentTop = getPaddingTop();
@@ -11294,7 +11319,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
             mIsRecyclableCount = recyclable ? mIsRecyclableCount - 1 : mIsRecyclableCount + 1;
             if (mIsRecyclableCount < 0) {
                 mIsRecyclableCount = 0;
-                if (DEBUG) {
+                if (BuildVars.DEBUG_VERSION) {
                     throw new RuntimeException("isRecyclable decremented below 0: "
                             + "unmatched pair of setIsRecyable() calls for " + this);
                 }
@@ -11492,7 +11517,7 @@ public class RecyclerView extends ViewGroup implements ScrollingView,
      * to store any additional required per-child view metadata about the layout.
      */
     public static class LayoutParams extends android.view.ViewGroup.MarginLayoutParams {
-        ViewHolder mViewHolder;
+        public ViewHolder mViewHolder;
         public final Rect mDecorInsets = new Rect();
         boolean mInsetsDirty = true;
         // Flag is set to true if the view is bound while it is detached from RV.

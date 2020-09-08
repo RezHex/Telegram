@@ -21,6 +21,7 @@ import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import androidx.annotation.Keep;
+
 import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -31,7 +32,6 @@ import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
-import android.widget.ListView;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.BuildVars;
@@ -72,10 +72,13 @@ public class DrawerLayoutContainer extends FrameLayout {
     private float scrimOpacity;
     private Drawable shadowLeft;
     private boolean allowOpenDrawer;
+    private boolean allowOpenDrawerBySwipe = true;
 
     private float drawerPosition;
     private boolean drawerOpened;
     private boolean allowDrawContent = true;
+
+    private boolean firstLayout = true;
 
     private AdjustPanLayoutHelper adjustPanLayoutHelper;
 
@@ -91,13 +94,17 @@ public class DrawerLayoutContainer extends FrameLayout {
         if (Build.VERSION.SDK_INT >= 21) {
             setFitsSystemWindows(true);
             setOnApplyWindowInsetsListener((v, insets) -> {
-                final DrawerLayoutContainer drawerLayout = (DrawerLayoutContainer) v;
+                final DrawerLayoutContainer drawerLayoutContainer = (DrawerLayoutContainer) v;
                 if (AndroidUtilities.statusBarHeight != insets.getSystemWindowInsetTop()) {
-                    drawerLayout.requestLayout();
+                    drawerLayoutContainer.requestLayout();
                 }
-                AndroidUtilities.statusBarHeight = insets.getSystemWindowInsetTop();
+                int newTopInset = insets.getSystemWindowInsetTop();
+                if ((newTopInset != 0 || AndroidUtilities.isInMultiwindow || firstLayout) && AndroidUtilities.statusBarHeight != newTopInset) {
+                    AndroidUtilities.statusBarHeight = newTopInset;
+                }
+                firstLayout = false;
                 lastInsets = insets;
-                drawerLayout.setWillNotDraw(insets.getSystemWindowInsetTop() <= 0 && getBackground() == null);
+                drawerLayoutContainer.setWillNotDraw(insets.getSystemWindowInsetTop() <= 0 && getBackground() == null);
 
                 if (Build.VERSION.SDK_INT >= 28) {
                     DisplayCutout cutout = insets.getDisplayCutout();
@@ -159,6 +166,9 @@ public class DrawerLayoutContainer extends FrameLayout {
 
     @Keep
     public void setDrawerPosition(float value) {
+        if (drawerLayout == null) {
+            return;
+        }
         drawerPosition = value;
         if (drawerPosition > drawerLayout.getMeasuredWidth()) {
             drawerPosition = drawerLayout.getMeasuredWidth();
@@ -174,6 +184,7 @@ public class DrawerLayoutContainer extends FrameLayout {
         setScrimOpacity(drawerPosition / (float) drawerLayout.getMeasuredWidth());
     }
 
+    @Keep
     public float getDrawerPosition() {
         return drawerPosition;
     }
@@ -186,7 +197,7 @@ public class DrawerLayoutContainer extends FrameLayout {
     }
 
     public void openDrawer(boolean fast) {
-        if (!allowOpenDrawer) {
+        if (!allowOpenDrawer || drawerLayout == null) {
             return;
         }
         if (AndroidUtilities.isTablet() && parentActionBarLayout != null && parentActionBarLayout.parentActivity != null) {
@@ -212,6 +223,9 @@ public class DrawerLayoutContainer extends FrameLayout {
     }
 
     public void closeDrawer(boolean fast) {
+        if (drawerLayout == null) {
+            return;
+        }
         cancelCurrentAnimation();
         AnimatorSet animatorSet = new AnimatorSet();
         animatorSet.playTogether(
@@ -236,11 +250,6 @@ public class DrawerLayoutContainer extends FrameLayout {
         startedTracking = false;
         currentAnimation = null;
         drawerOpened = opened;
-        if (!opened) {
-            if (drawerLayout instanceof ListView) {
-                ((ListView) drawerLayout).setSelectionFromTop(0, 0);
-            }
-        }
         if (Build.VERSION.SDK_INT >= 19) {
             for (int i = 0; i < getChildCount(); i++) {
                 View child = getChildAt(i);
@@ -281,6 +290,10 @@ public class DrawerLayoutContainer extends FrameLayout {
         }
     }
 
+    public void setAllowOpenDrawerBySwipe(boolean value) {
+        allowOpenDrawerBySwipe = value;
+    }
+
     private void prepareForDrawerOpen(MotionEvent ev) {
         maybeStartTracking = false;
         startedTracking = true;
@@ -302,7 +315,7 @@ public class DrawerLayoutContainer extends FrameLayout {
     }
 
     public boolean onTouchEvent(MotionEvent ev) {
-        if (!parentActionBarLayout.checkTransitionAnimation()) {
+        if (drawerLayout != null && !parentActionBarLayout.checkTransitionAnimation()) {
             if (drawerOpened && ev != null && ev.getX() > drawerPosition && !startedTracking) {
                 if (ev.getAction() == MotionEvent.ACTION_UP) {
                     closeDrawer(false);
@@ -310,7 +323,7 @@ public class DrawerLayoutContainer extends FrameLayout {
                 return true;
             }
 
-            if (allowOpenDrawer && parentActionBarLayout.fragmentsStack.size() == 1) {
+            if ((allowOpenDrawerBySwipe || drawerOpened) && allowOpenDrawer && parentActionBarLayout.fragmentsStack.size() == 1) {
                 if (ev != null && (ev.getAction() == MotionEvent.ACTION_DOWN || ev.getAction() == MotionEvent.ACTION_MOVE) && !startedTracking && !maybeStartTracking) {
                     parentActionBarLayout.getHitRect(rect);
                     startedTrackingX = (int) ev.getX();
@@ -359,6 +372,15 @@ public class DrawerLayoutContainer extends FrameLayout {
                             closeDrawer(drawerOpened && Math.abs(velX) >= 3500);
                         }
                     }
+                    startedTracking = false;
+                    maybeStartTracking = false;
+                    if (velocityTracker != null) {
+                        velocityTracker.recycle();
+                        velocityTracker = null;
+                    }
+                }
+            } else {
+                if (ev == null || ev != null && ev.getPointerId(0) == startedTrackingPointerId && (ev.getAction() == MotionEvent.ACTION_CANCEL || ev.getAction() == MotionEvent.ACTION_UP || ev.getAction() == MotionEvent.ACTION_POINTER_UP)) {
                     startedTracking = false;
                     maybeStartTracking = false;
                     if (velocityTracker != null) {
@@ -453,6 +475,11 @@ public class DrawerLayoutContainer extends FrameLayout {
                 }
             }
             inLayout = false;
+        } else {
+            int newSize = heightSize - AndroidUtilities.statusBarHeight;
+            if (newSize > 0 && newSize < 4096) {
+                AndroidUtilities.displaySize.y = newSize;
+            }
         }
 
         final boolean applyInsets = lastInsets != null && Build.VERSION.SDK_INT >= 21;
